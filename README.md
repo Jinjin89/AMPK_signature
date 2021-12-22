@@ -1,6 +1,11 @@
 # AMPK_signature_R_code
 ## 0. pkgs_version
 
+
+## 0. pre_defined_function
+
+In order to make code simpler and readable, some code are wrapped with `function`
+
 ## 1. data collection
 
 
