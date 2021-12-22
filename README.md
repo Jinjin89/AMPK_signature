@@ -4,7 +4,7 @@
 
 ## 0. pre_defined_function
 
-In order to make code simpler and readable, some code are wrapped with `function`
+In order to make code simpler and readable, some code are wrapped with `function`, the predefined function and its explanation are listed below
 
 ## 1. data collection
 
