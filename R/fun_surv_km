@@ -1,0 +1,55 @@
+fun_surv_km = function(input_data,
+                       Group="Group",
+                       Group_levels = NULL,legend_title = NULL,
+                       palette=NULL,graph_title = NULL,xlab = "Months",
+                       pval_size = 4,
+                       n_group = 10,return_fit = F){
+  suppressMessages(library(survival))
+  suppressMessages(library(survminer))
+  
+  
+  # if there are too many groups, consider cox
+  stopifnot("Too many groups,consider using cox or increase n_group parameter"=length(unique(input_data[[Group]])) < n_group)
+  
+  # run survival parsing first
+  # generate new column Group with supplied data
+  input_data[["Group"]] = input_data[[Group]]
+  # get legend title
+  if(is.null(legend_title)){
+    legend_title = Group
+  }
+  # change data into factor
+  if(is.null(Group_levels)){
+    Group_levels = sort(unique(input_data[[Group]]))
+  }
+  
+  input_data$Group = factor(input_data$Group,levels = Group_levels)
+  
+  #
+  # fit
+  s_f = surv_fit(Surv(time,status)~Group,data = input_data)
+  #print("=====================================")
+  print(surv_median(s_f))
+  if(return_fit){
+    return(s_f)
+  }else{
+    p <- ggsurvplot(s_f,
+                    data = input_data,
+                    palette = palette,
+                    conf.int = T,pval = T,
+                    # legend parameter
+                    legend.labs = Group_levels,
+                    legend.title = legend_title,
+                    # graph paramter
+                    title = graph_title,
+                    # risk_table
+                    risk.table = T,
+                    xlab = xlab, 
+                    pval.size = pval_size,
+                    #
+                    surv.median.line ="hv"
+                    )
+    return(p)
+  }
+}
+
