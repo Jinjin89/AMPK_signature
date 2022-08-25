@@ -1,0 +1,31 @@
+fun_surv_parsing = function(surv.dt,osOrdfs){
+  if(length(osOrdfs) == 3){
+    timeColumn=osOrdfs[1]
+    statusColumn=osOrdfs[2]
+    eventLabel=osOrdfs[3]
+  }else{
+    if(is.null(osOrdfs)){
+      timeColumn  = "time"
+      statusColumn =  "status"
+      eventLabel =   1}
+    else{
+      if(tolower(osOrdfs) == "dfs"){
+        timeColumn  =  "Disease Free (Months)"
+        statusColumn = "Disease Free Status"
+        eventLabel =   "1:Recurred/Progressed"}
+      else{
+        if(tolower(osOrdfs) == "os"){
+          timeColumn  = "Overall Survival (Months)"
+          statusColumn =  "Overall Survival Status"
+          eventLabel =   "1:DECEASED"
+        }else{
+          stop("Check osOrdfs parameter")
+          
+        }
+      }
+    }
+  }
+  surv.dt$time = surv.dt[[timeColumn]]
+  surv.dt$status = ifelse(surv.dt[[statusColumn]] == eventLabel,1,0)
+  return(surv.dt)
+}
