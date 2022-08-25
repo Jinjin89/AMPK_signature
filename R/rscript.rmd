@@ -1,0 +1,951 @@
+---
+title: "GC_AMPK"
+author: "LH"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+
+############################################################################
+#This rmarkdown file collected script from different authors.
+#I really appreciated that they agree to make it to public.
+############################################################################
+
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,dev = "pdf",fig.path = "./pdf/",out.height = "450px",warning = F)
+```
+
+
+```{r working directory}
+working_directory = "~/r_workspace/practice/gc_redo//" # working directory
+
+setwd(working_directory)
+
+```
+
+
+
+```{r source}
+
+source("~/r_workspace/script/rscript/fun_source_dir.R")
+
+# pkgs
+suppressMessages(
+  {
+    require(DT)
+    require(survcomp)
+    require(survminer)
+      require(factoextra)
+  require(FactoMineR)
+  }
+)
+
+fun_source_dir("~/r_workspace/script/rscript/")
+source("./src/src.R")
+
+```
+
+
+```{r data_structure}
+# 1) all your data ds
+
+ds_list = list()
+
+ds_list$tcga = readRDS("data/stad_ampk.rds")
+
+ds_list$tcga $clin %<>% 
+  mutate(AMPK_score = AMPK_score) %>% 
+  select(-AMPK_score)
+
+# 2) all your clin list
+clin_list = list()
+
+# 3) all your annotation list: data.frame, rownames is accession
+anno_list = list()
+
+# 4) config_list: all the other list
+config_list = list()
+
+# 5) maf list
+maf_list = list()
+
+# 6) data others
+others_list = list()
+
+
+# 7) results list
+results_list = list()
+
+
+# 8) genes list
+genes_list = list()
+
+
+
+```
+
+
+```{r project_data}
+# write you r project data here
+others_list$ampk_genes = fread("../GC_cluster_ampk/Figs_V2/table_1_AMPK_genesList.csv")
+
+others_list$ampk_genes %>% 
+  select(-V1) %>% 
+  fun_dt_dt(x_name = "ampk_genes_list")
+
+
+# palette
+palette = "lancet"
+
+pfs_lable = c("Progress Free Survival (Months)","Progression Free Status","1:PROGRESSION")
+
+dss_label =  c("Months of disease-specific survival","Disease-specific Survival status","1:DEAD WITH TUMOR")
+
+# theme
+theme_now = function(...){
+  theme_clean()+
+    theme(
+      plot.background = element_blank(),
+      panel.background = element_blank(),
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor.x = element_blank(),
+      legend.background = element_blank(),
+      legend.title = element_text(size = 9,face = "plain"),
+      legend.text = element_text(size = 9,face = "plain"),
+      legend.position = "top",
+      axis.text = element_text(size = 9),
+      axis.title = element_text(size = 12),
+      plot.title = element_text(size = 14),
+      panel.grid.major.y = element_blank()
+    )+
+    theme(...)
+}
+
+
+func.pca.signature = function(input.expr,feature.selected){
+  # get signature 1 -----
+  pca.sig1 = PCA(t(na.omit(input.expr[match(feature.selected$genes$up,rownames(input.expr)),])),graph = F)
+  pca.sig1.df = data.frame(pca.sig1$ind$coord[,1])
+  colnames(pca.sig1.df) = "Signature_1"
+  # get signature 2 -----
+  pca.sig2 = PCA(t(na.omit(input.expr[match(feature.selected$genes$down,rownames(input.expr)),])),graph = F)
+  pca.sig2.df =  data.frame(pca.sig2$ind$coord[,1])
+  colnames(pca.sig2.df) = "Signature_2"
+  
+  
+  # get score----------
+  pca.sig.score = merge(pca.sig1.df,pca.sig2.df,by=0)
+  pca.sig.score$AMPK_score = pca.sig.score$Signature_1  - pca.sig.score$Signature_2
+  return(pca.sig.score)
+}
+
+```
+
+# consensus clustering analysis
+
+```{r}
+tcga.stad.expr.matr.genes = na.omit(tcga.stad.expr.matr[match(genes.table$hs_ens,rownames(tcga.stad.expr.matr)),])
+
+csc.cluster1 = ConsensusClusterPlus(d=tcga.stad.expr.matr.genes
+                                        ,maxK =7
+                                        ,reps = 1000
+                                        ,pItem = 0.8
+                                        ,pFeature = 1
+                                        ,clusterAlg="km"
+                                        ,distance="euclidean"
+                                        ,seed=12321
+                                        ,title = "E://file/GC_AMPK/r_data/concensusClusterFigures"
+                                        ,plot="png")
+  
+# cluster
+optimal.k.value = optimal.k(csc.cluster1,5)
+csc.cluster = data.frame(csc.cluster1[[optimal.k.value]]$consensusClass)
+colnames(csc.cluster) = "Cluster"
+table(csc.cluster$Cluster)
+tcga.stad.clin$Cluster =  csc.cluster$Cluster[match(tcga.stad.clin$`Sample ID`,rownames(csc.cluster))]
+
+```
+
+# cluster heatmap
+
+
+```{r}
+# cluster annotation
+cls.anno = na.omit(data.frame(row.names = tcga.stad.clin$`Sample ID`,
+                     Cluster = factor(tcga.stad.clin$Cluster)))
+cls.anno = cls.anno[order(cls.anno$Cluster),,drop=F]
+# heatmap annotation for MAPK gense
+hm.anno = data.frame(row.names = tcga.stad.clin$`Sample ID`,
+                     Cluster = factor(tcga.stad.clin$Cluster))
+hm.anno = hm.anno[order(hm.anno$Cluster),,drop=F]
+hm.anno = hm.anno[intersect(rownames(hm.anno),colnames(tcga.stad.expr.matr.genes.zscore)),,drop=F]
+hm.anno$T_stage = tcga.clin$T_stage[match(rownames(hm.anno),tcga.clin$`Sample ID`)]
+hm.anno$N_stage = tcga.clin$N_stage[match(rownames(hm.anno),tcga.clin$`Sample ID`)]
+hm.anno$M_stage = tcga.clin$M_stage[match(rownames(hm.anno),tcga.clin$`Sample ID`)]
+hm.anno$Histological_grade = tcga.clin$Neoplasm_Histologic_Grade[match(rownames(hm.anno),tcga.clin$`Sample ID`)]
+hm.anno$Disease_stage = tcga.clin$Neoplasm_Disease_Stage[match(rownames(hm.anno),tcga.clin$`Sample ID`)]
+# fisher test
+hm.anno %>% 
+  {table(.$Cluster,.$T_stage)} %>% 
+  fisher.test() %>% 
+  .$p.value %>% 
+  gtools::stars.pval()
+hm.anno %>% 
+  {table(.$Cluster,.$N_stage)} %>% 
+  fisher.test() %>% 
+  .$p.value %>% 
+  gtools::stars.pval()
+hm.anno %>% 
+  {table(.$Cluster,.$M_stage)} %>% 
+  fisher.test() %>% 
+  .$p.value %>% 
+  gtools::stars.pval()
+hm.anno %>% 
+  {table(.$Cluster,.$Disease_stage)} %>% 
+  fisher.test() %>% 
+  .$p.value %>% 
+  gtools::stars.pval()
+hm.anno %>% 
+  {table(.$Cluster,.$Histological_grade)} %>% 
+  fisher.test() %>% 
+  .$p.value %>% 
+  gtools::stars.pval()
+
+
+table(hm.anno$Cluster)
+pheatmap(tcga.stad.expr.matr.genes.zscore[,rownames(hm.anno)],
+         show_rownames = F,
+         show_colnames = F,
+         cluster_cols = F,
+         annotation_col = hm.anno,
+         annotation_colors  = list(Cluster=c(`1`="#174889",`2`="#ec1d25"),
+                                   T_stage = c(T1 = "#83EADD",T2 = "#3BD1BF",T3 = "#0DA391",T4 = "#07544B"),
+                                   N_stage = c(N0 = "#E5EA83",N1 = "#DAE055",N2 = "#C9D124",N3 = "#A6AD21"),
+                                   M_stage = c(M0 = "#AA7FC6",M1 = "#773E9B"),
+                                   Histological_grade = c(G1 = "#75DB92",G2 = "#36C960",G3 = "#197032"),
+                                   Disease_stage = c('STAGE I' = "#83EADD",'STAGE II' = "#3BD1BF",'STAGE III' = "#0DA391","STAGE IV" = "#07544B")))
+
+
+```
+
+# cluster enrichment
+
+```{r}
+cluster_deg_enrichment_kegg = enrichKEGG(input.gene.table$ENTREZID[match(deg.hs,input.gene.table$SYMBOL)])
+#cluster_deg_enrichment_kegg = setReadable(cluster_deg_enrichment_kegg,OrgDb = org.Hs.eg.db,keyType = "ENTREZID")
+fc = structure(tcga.cls.deg$logFC,names = tcga.cls.deg$ID)
+
+cnetplot(cluster_deg_enrichment_kegg,circular = TRUE, colorEdge = TRUE,
+         foldChange = fc,cex_label_gene  = 0.2,
+         node_label = "gene",
+         showCategory = c("Calcium signaling pathway",
+                          "ECM-receptor interaction",
+                          "cAMP signaling pathway",
+                          "Cell adhesion molecules",
+                          "PI3K-Akt signaling pathway"))
+
+```
+
+
+# cluster pca analysis
+
+```{r}
+pca.res = PCA(t(tcga.stad.expr.matr.genes),graph = F)
+tcga.mapk.pca.plot = fviz_pca_ind(pca.res,label=F,habillage = cls.anno[colnames(tcga.stad.expr.matr.genes),],addEllipses = T)
+
+```
+
+
+# cluster differential expression analysis
+
+```{r}
+# 5. Cluster Deg-------------
+# deg data preprocess
+func.deg.data.pre = function(input.expr.matr,remove.zeros.pct = 0.2){
+  require(clusterProfiler)
+  require(org.Hs.eg.db)
+  input.gene.table <<- bitr(rownames(input.expr.matr),fromType = 'SYMBOL',toType = "ENTREZID",OrgDb = org.Hs.eg.db)
+  input.expr.matr = input.expr.matr[input.gene.table$SYMBOL,]
+  # remove zeros
+  if(!is.null(remove.zeros.pct)){
+    z_value = min(input.expr.matr)
+    z_count = ncol(input.expr.matr) * remove.zeros.pct
+    input.expr.matr = input.expr.matr[rowSums(input.expr.matr == z_value) < z_count,]
+    
+  }
+  return(input.expr.matr)
+  
+}
+tcga.stad.expr.matr.pre = func.deg.data.pre(tcga.stad.expr.matr)
+# DEG analysis here 
+tcga.cls.deg = DegLimmaFunc(tcga.stad.expr.matr.pre,anno = cls.anno,contrast = c(2,1))
+# reorder deg list
+tcga.cls.deg = tcga.cls.deg[order(tcga.cls.deg$logFC),]
+# gene up regulated
+sum(tcga.cls.deg$logFC > 1 & tcga.cls.deg$adj.P.Val < 0.01)
+# gene down regulateds
+sum(tcga.cls.deg$logFC < -1 & tcga.cls.deg$adj.P.Val < 0.01)
+deg.hs = tcga.cls.deg$ID[tcga.cls.deg$adj.P.Val<0.01 & abs(tcga.cls.deg$logFC) > 1]
+length(deg.hs)
+
+tcga.cls.deg$Regulation = ifelse(tcga.cls.deg$adj.P.Val > 0.01 | abs(tcga.cls.deg$logFC ) < 1,"notSig",
+                              ifelse(tcga.cls.deg$logFC > 0 ,"up","down")) 
+
+table(tcga.cls.deg$Regulation)
+# Figures 1, volcano
+tcga.cls.deg %>%
+  ggplot() +
+  geom_point(aes(logFC,-log10(adj.P.Val),color = Regulation)) +
+  scale_color_manual(values = c("#174889","gray","#ec1d25"))
+
+
+pheatmap(as.matrix(tcga.stad.expr.zscore.matr[deg.hs,sampleid.hm.tmp]),
+         show_rownames = F,
+         show_colnames = F,
+         cluster_cols = F,
+         cluster_rows = F,
+         annotation_col = cls.anno[intersect(rownames(cls.anno),colnames(tcga.stad.expr.zscore.matr)),,drop=F],
+         annotation_colors  = list(Cluster=c(`1`="#174889",`2`="#ec1d25")))
+
+
+
+```
+
+
+
+# featue selection by rf
+
+```{r}
+
+# 6. Feature selection------------------
+func.feature.boruta.deg = function(input.deg,input.expr,input.cluster){
+  # megrge exprssion data and cluster
+  input.expr.df = data.frame(t(input.expr),check.names = F)
+  input.expr.df$Cluster = input.cluster[[1]][match(rownames(input.expr.df),rownames(input.cluster))]
+  
+  # 1. up
+  deg.up = input.deg$ID[input.deg$adj.P.Val < 0.01 & input.deg$logFC > 1]
+  genes.keep.up = Boruta(Cluster~.,data = input.expr.df[,c(deg.up,'Cluster')])
+  genes.keep.up.hs = names(genes.keep.up$finalDecision[genes.keep.up$finalDecision != 'Rejected'])
+  # 2. down
+  deg.down = input.deg$ID[input.deg$adj.P.Val < 0.01 & input.deg$logFC < -1]
+  genes.keep.down = Boruta(Cluster~.,data = input.expr.df[,c(deg.down,'Cluster')])
+  genes.keep.down.hs = names(genes.keep.down$finalDecision[genes.keep.down$finalDecision != 'Rejected'])
+  
+  return(list(res = list(genes.keep.up,genes.keep.down),
+              genes = list(up = genes.keep.up.hs,
+                           down = genes.keep.down.hs)))
+}
+# boruta
+#feature.selected = func.feature.boruta.deg(tcga.cls.deg,tcga.stad.expr.matr.pre,cls.anno)
+#feature.selected.copy= feature.selected
+feature.selected$genes$up = gsub("\\`","",feature.selected$genes$up)
+feature.selected$genes$down = gsub("\\`","",feature.selected$genes$down)
+
+feature.selected.hs = unname(unlist(feature.selected$genes))
+library(circlize)
+col_fun = colorRamp2(c(-20, 0, 20), c("navy","white","firebrick3"))
+ComplexHeatmap::Heatmap(as.matrix(tcga.stad.expr.matr[match(feature.selected.hs
+                                                     ,rownames(tcga.stad.expr.matr))
+                                               ,rownames(cls.anno)]),
+         show_row_names  = F,
+         show_column_names  = F,
+         cluster_columns  = F,
+         cluster_rows = F,
+         top_annotation = ComplexHeatmap::HeatmapAnnotation(Cluster = cls.anno$Cluster,
+                                                            col =  list(Cluster=c(`1`="#174889",`2`="#ec1d25"))),
+         row_split = c(rep("Signature2",length(feature.selected$genes$up)),
+                       rep("Signature1",length(feature.selected$genes$down))),
+         row_km = T,
+         column_split = cls.anno$Cluster,
+         col = col_fun
+         )
+
+```
+
+
+# signature construction function 
+
+```{r}
+func.pca.signature = function(input.expr,feature.selected){
+  # get signature 1 -----
+  pca.sig1 = PCA(t(na.omit(input.expr[match(feature.selected$genes$up,rownames(input.expr)),])),graph = F)
+  pca.sig1.df = data.frame(pca.sig1$ind$coord[,1])
+  colnames(pca.sig1.df) = "Signature_1"
+  # get signature 2 -----
+  pca.sig2 = PCA(t(na.omit(input.expr[match(feature.selected$genes$down,rownames(input.expr)),])),graph = F)
+  pca.sig2.df =  data.frame(pca.sig2$ind$coord[,1])
+  colnames(pca.sig2.df) = "Signature_2"
+  
+  
+  # get score----------
+  pca.sig.score = merge(pca.sig1.df,pca.sig2.df,by=0)
+  pca.sig.score$AMPK_score = pca.sig.score$Signature_1  - pca.sig.score$Signature_2
+  return(pca.sig.score)
+}
+
+```
+
+# immune signature analysis: ESTIAMTE, CIBERSORT
+
+```{r}
+
+anno.group = data.frame(row.names = tcga.clin$`Sample ID`,
+                        Group = tcga.clin$Group)
+
+func.immue2(anno = na.omit(anno.group),palette = palette)
+func.estimate2(anno = na.omit(anno.group),palette = palette,tcga.file = "~/r_workspace/db/tcga/estimate/STAD_rsem.txt")
+```
+
+
+# signature survival analysis
+
+```{r }
+ds_list$tcga$clin %>% 
+  fun_surv_parsing("os") %>% 
+  fun_surv_cutoff(feature = "AMPK_score") %>% 
+  fun_surv_km(palette = palette,conf.int = F) %>% 
+  fun_km_re(theme_now = theme_now())
+
+ds_list$tcga$clin %>% 
+  fun_surv_parsing("dfs") %>% 
+  fun_surv_cutoff(feature = "AMPK_score") %>% 
+  fun_surv_km(palette = palette,conf.int = F) %>% 
+  fun_km_re(theme_now = theme_now())
+
+ds_list$tcga$clin %>% 
+  fun_surv_parsing(pfs_lable) %>% 
+  fun_surv_cutoff(feature = "AMPK_score") %>% 
+  fun_surv_km(palette = palette,conf.int = F) %>% 
+  fun_km_re(theme_now = theme_now())
+
+ds_list$tcga$clin %>% 
+  fun_surv_parsing(dss_label) %>% 
+  fun_surv_cutoff(feature = "AMPK_score") %>% 
+  fun_surv_km(palette = palette,conf.int = F) %>% 
+  fun_km_re(theme_now = theme_now())
+
+```
+
+# Signature enrichment
+
+```{r}
+# 16. signature correlation analysis------
+harmark_enrichment = func.cor.enrichment(expr.matr = tcga.stad.expr.matr.pre,
+                    score.dt = tcga.clin,score.id = "Sample ID",score.column = "Signature",enrichment = "hallmark")
+
+ridgeplot(harmark_enrichment$hallmark,)
+
+kegg_enrichment = func.cor.enrichment(expr.matr = tcga.stad.expr.matr.pre,
+                                         score.dt = tcga.clin,score.id = "Sample ID",score.column = "Signature",enrichment = "kegg")
+ridgeplot(kegg_enrichment$kegg,showCategory = 10)
+
+```
+
+# validation
+
+```{r}
+
+func.validation = function(gse.expr.list
+                           ,feature.selected
+                           ,gene.id.table=input.gene.table
+                           ,sampleID = 'Sample ID'
+                           ,os.label = c("time","status",1),
+                           title=NULL){
+  # parsing the gse data
+  gse.expr = gse.expr.list$gse.expr
+  gse.clin = gse.expr.list$gse.clin
+  gse.expr[[1]] = input.gene.table$SYMBOL[match(gse.expr[[1]],input.gene.table$ENTREZID)]
+  gse.expr = na.omit(gse.expr)
+  input.expr = as.matrix(gse.expr[,-1])
+  rownames(input.expr) = gse.expr$ENTREZID
+  
+  # 
+  
+  gse.ampk.score = func.pca.signature(input.expr,feature.selected)
+  
+  # merge data
+  gse.clin$AMPK_score = gse.ampk.score$AMPK_score[match(gse.clin[[sampleID]],gse.ampk.score[[1]])]
+  
+  # survival----
+  func.surv.dt(surv.dt =gse.clin,
+               osOrdfs = os.label,
+               survivalGroup = "AMPK_score",
+               pct = 0.5,
+               palette = palette,title = title)
+  #return(gse.clin)
+}
+
+ggarrange(
+func.validation(gse.expr.list = gse13861,feature.selected = feature.selected,title = "GSE13861")$plot,
+func.validation(gse.expr.list = gse26901,feature.selected = feature.selected,title = "GSE26901")$plot,
+func.validation(gse.expr.list = gse66229,feature.selected = feature.selected,title = "GSE66229")$plot,
+
+func.validation(gse.expr.list = gse13861,feature.selected = feature.selected,os.label = c("RFS.m","Recurrence (1=yes, 0=no)",1),title = "GSE13861_RFS")$plot,
+
+
+func.validation(gse.expr.list = gse26901,feature.selected = feature.selected,os.label = c("RFS.m","Recurrence (1=yes, 0=no)",1),title = "GSE26901_RFS")$plot,
+
+func.validation(gse.expr.list = gse66229,feature.selected = feature.selected,c("DFS.m","Recur",1),title = "GSE66229_DFS")$plot,common.legend = T)
+
+
+```
+
+# clinical analysis
+
+```{r}
+ggarrange(plotlist = func.clin.line(input.clin = tcga.clin,features = c("T_stage","N_stage","M_stage","Neoplasm_Histologic_Grade"),rs = "Signature",palette = palette))
+ggarrange(plotlist = func.clin.box(input.clin = tcga.clin,features = c("T_stage","N_stage","M_stage","Neoplasm_Histologic_Grade"),rs = "Signature",palette = palette))
+
+```
+
+# mutation analysis-mutation count
+
+```{r}
+maf = read.maf("~/r_workspace/db/tcga/tcga_stad/stad_tcga_pan_can_atlas_2018/data_mutations_mskcc.txt")
+tcga.clin$Group = ifelse(tcga.clin$Signature > median(tcga.clin$Signature,na.rm = T),'High','Low')
+
+signature_high_sampleID = na.omit(tcga.clin$`Sample ID`[tcga.clin$Group =="High"])
+signature_low_sampleID = na.omit(tcga.clin$`Sample ID`[tcga.clin$Group =="Low"])
+
+maf_high = subsetMaf(maf,tsb = signature_high_sampleID)
+maf_low = subsetMaf(maf,tsb = signature_low_sampleID)
+oncoplot(maf_high)
+oncoplot(maf_low)
+maf_compare_df = mafCompare(maf_high,maf_low,m1Name = "Signature_high",m2Name =  "Signature_low")
+maf_compare_df$results = maf_compare_df$results[(maf_compare_df$results$Signature_high + maf_compare_df$results$Signature_low)>50,]
+
+maf_compare_df$results = maf_compare_df$results[order(maf_compare_df$results$Signature_high,decreasing = T),]
+forestPlot(maf_compare_df,pVal = 0.01)
+
+ggboxplot(tcga.clin,x="Group")
+
+tcga.clin %>% 
+  filter(!is.na(Group)) %>% 
+  ggplot(aes(x = Group, y = Mutation_count)) +
+  geom_violin(aes(fill = Group)) +
+  geom_boxplot(width = 0.2) +
+  scale_y_log10() +
+  stat_compare_means()
+
+lollipopPlot2(maf_high,maf_low,m1_name = "Signature high",m2_name = "Signature low",gene = 'TTN')
+lollipopPlot2(maf_high,maf_low,m1_name = "Signature high",m2_name = "Signature low",gene = 'MUC16')
+lollipopPlot2(maf_high,maf_low,m1_name = "Signature high",m2_name = "Signature low",gene = 'LRP1B')
+
+```
+
+
+
+# stad analysis
+
+```{r}
+
+# 14. imvigor effects has benefits, DO TIDE, T-cell exclusions, TIDE score----
+tcga.stad.expr.matr.pre.nor = t(apply(tcga.stad.expr.matr.pre,1,function(x)(x - mean(x))))
+write.table(tcga.stad.expr.matr.pre.nor,file = "stad.txt",row.names = T,col.names = T,sep = "\t")
+stad_tide = fread("stad_tide.csv")
+stad_tide$Group = tcga.clin$Group[match(stad_tide$Patient,tcga.clin$`Sample ID`)]
+table(stad_tide$Group)
+colnames(stad_tide)
+ggarrange(ggboxplot(stad_tide,x="Group",y="TIDE",fill="Group",palette = palette) + stat_compare_means(),
+ggboxplot(stad_tide,x="Group",y="Dysfunction",fill="Group",palette = palette) + stat_compare_means(),
+ggboxplot(stad_tide,x="Group",y="Exclusion",fill="Group",palette = palette) + stat_compare_means(),
+nrow = 1,ncol = 3,common.legend = T)
+ggplot(data = stad_tide) +
+  geom_bar(aes(x=Group,fill=Responder),position = "fill")+fill_palette(palette = palette) +
+  annotate("text",x = 1.5, y = 1.03,label= 'p=1e-07')
+fisher.test(table(stad_tide$Group,stad_tide$Responder ))
+
+ggboxplot(stad_tide,x="Group",y="CD8") + stat_compare_means()
+ggboxplot(stad_tide,x="Group",y="caf") + stat_compare_means()
+# part3: subtypes
+tcga_subtypes = na.omit(data.frame(row.names = tcga.clin$`Sample ID`,
+                           Cluster = factor(tcga.clin$Cluster),
+                           Subtypes = tcga.clin$`Cancer Type Detailed`))
+
+ggplot(data = tcga_subtypes) +
+  geom_bar(aes(x=Cluster,fill=Subtypes),position = "fill") + theme_classic2()
+fisher.test(as.matrix(table(tcga_subtypes$Cluster,tcga_subtypes$Subtypes)),hybrid = T)
+
+```
+
+# imvigor analysis
+```{r }
+
+func.imvigor = function(model.coef,palette = "simpsons"){
+  library(IMvigor210CoreBiologies)
+  require(ggpubr)
+  require(pROC)
+  data(cds)
+  cds2 <- cds
+  voomD <- filterNvoom(counts(cds2),
+                       minSamples=ncol(counts(cds2))/10,
+                       minCpm=0.25)
+  m <- voomD$E
+  m <- t(scale( t( m ),
+                center=TRUE, 
+                scale=TRUE)
+  )
+  feature.df = cds@featureData@data
+  imvi.expr =m
+  # rename the epxressio data with hugo symbol
+  rownames(imvi.expr) = feature.df$symbol[match(rownames(imvi.expr),feature.df$entrez_id)]
+
+  # get clinical data
+  imvigor.clin = fread("~/r_workspace/db/gse/imvigor210/imvigor_clin.csv")
+  
+  # merge the clinical data
+  imvigor.clin = func.pca.signature(input_expr = imvi.expr,
+                                    sig_1 = feature.selected$genes$up,
+                                    sig_2 = feature.selected$genes$down,
+                                    tcga.clin = imvigor.clin,SampleID = "V1",
+                                    Surv_p = F)
+  # survival analysis----
+  km = func.surv.dt(surv.dt = imvigor.clin
+                    ,osOrdfs = c("os","censOS",1)
+                    ,survivalGroup = 'Risk_score'
+                    ,pct = 0.69
+                    ,title = "Imvigor210 Overall survival KM"
+                    ,palette = palette )
+  # ggboxplot
+  box.plot = ggboxplot(imvigor.clin[!is.na(imvigor.clin$binaryResponse),]
+                       ,x="binaryResponse"
+                       ,y="Risk_score"
+                       ,fill = "binaryResponse"
+                       ,palette = palette) + 
+    stat_compare_means()
+  
+  # pROC
+  roc.res = roc(response = imvigor.clin$binaryResponse,
+                predictor = imvigor.clin$Risk_score
+                ,auc = T)
+  plot.roc(roc.res,add=F, xlim = c(1,0),ylim=c(0,1),print.auc = T,plot=F)
+  
+  return(list(
+     clin = imvigor.clin,
+    km=km,
+    boxplot = box.plot,
+    roc=roc.res
+  ))
+}
+
+imvigor_list = func.imvigor(1,palette = palette ) # 1 is not used 
+imvigor_list$clin$Group = ifelse(imvigor_list$clin$Risk_score > quantile(imvigor_list$clin$Risk_score,0.69),"High","Low")
+
+imvi_fisher = fisher.test(imvigor_list$clin$Group,imvigor.clin$binaryResponse)
+imvigor_list$clin %>% 
+  filter(!is.na(binaryResponse)) %>% 
+  ggplot(aes(x = Group, fill = binaryResponse)) + 
+  geom_bar(position = "fill") +
+  annotate("text",x = 1.5, y = 1.03,label = paste0("p=",round(imvi_fisher$p.value,3))) +
+  fill_palette(palette = palette)
+
+```
+
+
+
+# ic50 analysis
+
+```{r}
+
+tcga.clin_ic50_func = drug.pred.func(tcga.expr.matr = tcga.stad.expr.matr.pre,drugs = drugs_list,
+                                      tcga.clin = tcga.clin)
+
+
+tcga.clin_ic50_func %>% 
+  filter(!is.na(Group)) %>% 
+  select(one_of(c("Group",drugs_list))) %>% 
+  melt() %>% 
+  group_by(variable) %>% 
+  do(t_test = t.test(.$value[.$Group == "Low"],
+                     .$value[.$Group == "High"])) %>% 
+  mutate(pvalue = t_test$p.value) %>% 
+  mutate(p.adj = p.adjust(p = pvalue,method = "fdr",n=length(drugs_list))) %>% 
+  filter(pvalue < 0.05) %>% 
+  .[[1]] %>% 
+  as.character() -> drugs
+
+drugs = c("Cisplatin","Axitinib","Docetaxel","Mitomycin.C","Bortezomib","Paclitaxel","Sorafenib")
+
+plot_function = function(x){
+  ggplot(tcga.clin_ic50_func[!is.na(Group),],aes_string(x = "Group", y = x,fill = "Group"))+
+    geom_violin() +geom_boxplot(width = 0.2) +
+    stat_compare_means(label = "p.signif",label.x = 1.4)+
+    theme(axis.title.x = element_blank()) +
+    fill_palette(palette = palette)
+}
+
+ggarrange(plotlist = drugs %>% 
+            map(plot_function),
+          common.legend = T,nrow=2,ncol = 4)
+
+```
+
+
+# signature subtype analysis
+
+```{r}
+
+tcga.clin %>% 
+  dplyr::filter(!is.na(Subtype)) %>% 
+  count(Group,Subtype)
+
+tcga.clin %>% 
+  dplyr::filter(!is.na(Subtype)) %>% 
+  count(Group,Subtype) %>%
+  ggplot(aes(y = n,axis2 = Group,axis1 = Subtype)) +
+  geom_alluvium(aes(fill = Subtype))+
+  scale_x_discrete(limits = c("Subtype", "Signature"), expand = c(.2, .05)) +
+  #xlab(gene) +
+  geom_stratum() +
+  geom_text(stat = "stratum", aes(label = after_stat(stratum))) +
+  theme_minimal() +
+  fill_palette(palette = palette)
+
+
+# subtype stratification
+
+tcga.clin %>% 
+  filter(!is.na(Subtype) &Subtype != 'STAD_GS') %>% 
+  func.surv.dt(osOrdfs = "os",survivalGroup = "Group",palette = palette)
+tcga.clin %>% 
+  filter(!is.na(Subtype) &Subtype != 'STAD_GS') %>% 
+  func.surv.dt(osOrdfs = "dfs",survivalGroup = "Group",palette = palette)
+tcga.clin %>% 
+  filter(!is.na(Subtype) &Subtype != 'STAD_GS') %>% 
+  func.surv.dt(osOrdfs = pfs_label,survivalGroup = "Group",palette = palette)
+ggarrange(
+tcga.clin %>% 
+  filter(!is.na(Subtype) & !Subtype %in% c('STAD_GS',"STAD_MSI")) %>% 
+  func.surv.dt(osOrdfs = "os",survivalGroup = "Signature",palette = palette,pct = seq(0.25,0.75,0.01),title = "OS") %>% .$plot,
+tcga.clin %>% 
+  filter(!is.na(Subtype) & !Subtype %in% c('STAD_GS',"STAD_MSI")) %>% 
+  func.surv.dt(osOrdfs = "dfs",survivalGroup = "Signature",palette = palette,pct = seq(0.25,0.75,0.01),title = "DFS")%>% .$plot,
+
+tcga.clin %>% 
+  filter(!is.na(Subtype) & !Subtype %in% c('STAD_GS',"STAD_MSI")) %>% 
+  func.surv.dt(osOrdfs = dds_label,survivalGroup = "Signature",palette = palette,pct = seq(0.25,0.75,0.01),title = "DSS")%>% .$plot,
+
+
+tcga.clin %>% 
+  filter(!is.na(Subtype) & !Subtype %in% c('STAD_GS',"STAD_MSI")) %>% 
+  func.surv.dt(osOrdfs = pfs_label,survivalGroup = "Signature",palette = palette,pct = seq(0.25,0.75,0.01),title = "PFS")%>% .$plot,
+common.legend = T,nrow = 1,ncol = 4)
+
+tcga.clin %>% 
+  filter(!is.na(Subtype) & !is.na(Group)) %>% 
+  mutate(GS_Signature = ifelse(Subtype == "STAD_GS","GS","Others")) %>% 
+  mutate(GS_Signature = paste(GS_Signature,Group,sep = "_"))  %>% 
+  func.surv.dt(osOrdfs = "os",survivalGroup = "GS_Signature",palette = palette)
+tcga.clin %>% 
+  filter(!is.na(Subtype) & !is.na(Group)) %>% 
+  mutate(GS_Signature = ifelse(Subtype == "STAD_GS","GS","Others")) %>% 
+  mutate(GS_Signature = paste(GS_Signature,Group,sep = "_"))  %>% 
+  func.surv.dt(osOrdfs = "dfs",survivalGroup = "GS_Signature",palette = palette)
+
+
+tcga.clin %>% 
+  filter(!is.na(Subtype) & !is.na(Group)) %>% 
+  mutate(GS_Signature = ifelse(Subtype == "STAD_GS","GS","Others")) %>% 
+  mutate(GS_Signature = paste(GS_Signature,Group,sep = "_"))  %>% 
+  func.surv.dt(osOrdfs = dds_label,survivalGroup = "GS_Signature",palette = palette)
+
+
+tcga.clin %>% 
+  filter(!is.na(Subtype) & !is.na(Group)) %>% 
+  mutate(GS_Signature = ifelse(Subtype == "STAD_GS","GS","Others")) %>% 
+  mutate(GS_Signature = paste(GS_Signature,Group,sep = "_"))  %>% 
+  func.surv.dt(osOrdfs = pfs_label,survivalGroup = "GS_Signature",palette = palette)
+
+
+
+gse66229_clin %>% 
+  mutate(ACRG.sub = factor(ACRG.sub,levels = c("EMT","TP53positive","TP53neg","MSI"))) %>% 
+  ggplot(aes(x = ACRG.sub,y=MAPK_score,fill = ACRG.sub )) +
+  geom_violin() +geom_boxplot(width = 0.2 ) +
+  stat_compare_means(comparisons = list(c("EMT","TP53positive"),c("EMT","TP53neg"),c("EMT","MSI")))
+    
+gse66229_clin %>% 
+  mutate(Group = ifelse(MAPK_score > median(MAPK_score),"High","Low")) %>% 
+  dplyr::filter(!is.na(ACRG.sub)) %>% 
+  count(Group,ACRG.sub) %>%
+  ggplot(aes(y = n,axis2 = Group,axis1 = ACRG.sub)) +
+  geom_alluvium(aes(fill = ACRG.sub))+
+  scale_x_discrete(limits = c("Subtype", "Signature"), expand = c(.2, .05)) +
+  #xlab(gene) +
+  geom_stratum() +
+  geom_text(stat = "stratum", aes(label = after_stat(stratum))) +
+  theme_minimal() +
+  fill_palette(palette = palette)
+
+gse66229_clin %>% 
+  mutate(Group = ifelse(MAPK_score > median(MAPK_score),"High","Low")) %>% 
+  dplyr::filter(!is.na(ACRG.sub)) %>% 
+  count(Group,ACRG.sub)
+
+ggarrange(
+gse66229_clin %>% 
+  filter(ACRG.sub %in% c("TP53positive","TP53neg")) %>% 
+  func.surv.dt(osOrdfs = c("DFS.m","Recur",1),
+               survivalGroup = "MAPK_score",
+               pct = seq(0.25,0.75,0.01),
+               palette = palette,title = "TP53Postive&TP53negtive_DFS") %>% 
+  .$plot,
+
+gse66229_clin %>% 
+  filter(ACRG.sub %in% c("TP53positive","TP53neg")) %>% 
+  func.surv.dt(osOrdfs = NULL,
+               survivalGroup = "MAPK_score",
+               pct = seq(0.25,0.75,0.01),
+               palette = palette,
+               title = "TP53Postive&TP53negtive_OS") %>% 
+  .$plot,common.legend = T)
+
+```
+
+
+
+
+# Add analysis in pancancer
+
+```{r }
+# get pan cancer data
+
+pancancer.names = list.files("~/r_workspace/db/tcga/tcga_rds_v2/")
+
+#load("../GC_cluster_ampk/.RData")
+#saveRDS(feature.selected,"data/signature.rds")
+signature_genes = readRDS("data/signature.rds")
+
+pancancer_list = map(pancancer.names,function(ds_name){
+  require(factoextra)
+  require(FactoMineR)
+  # 1) get ds
+  ds_tmp = readRDS(paste0("~/r_workspace/db/tcga/tcga_rds_v2/",ds_name))
+  
+  # 2) get_clin and expression
+  expr = ds_tmp$expr
+
+  clin = ds_tmp$clin %>%
+    filter(.$sample %in% colnames(expr)) %>% 
+    filter(barcode =="01")# get only primary solid tumor samples
+  
+  if(nrow(clin) < 100 ){ # remove samples less than 100
+    return(NULL)
+  }else{
+    sig_tmp = 
+      func.pca.signature(input.expr = expr,feature.selected = signature_genes) %>% 
+      as.data.frame() %>% 
+      set_rownames(.[[1]])
+    
+    clin %<>% 
+      mutate(ampk_score = sig_tmp[.$sample,"AMPK_score"])
+    return(clin)
+    
+  }
+  
+}) %>% 
+    set_names(pancancer.names)
+
+pancancer_list
+# saveRDS(pancancer_list,"data/pancancer_signature.rds")
+
+# get pancancer 
+pancancer_list = readRDS("data/pancancer_signature.rds") %>% 
+  {.[lengths(.)!= 0]} %>% 
+  map(function(x){
+    x %>% 
+      fun_surv_parsing(c("OS.time","OS",1)) %>% 
+      select(cancer,ampk_score,time,status) %>% 
+      mutate(ampk_score = ampk_score /10)
+  }) %>% 
+  reduce(rbind)
+
+pancancer_list %>% 
+  group_by(cancer) %>% 
+  do(fun_unicox_multi(.,variable = "ampk_score")) %>% 
+  ungroup() %>% 
+  mutate(features = cancer) %>% #head
+  arrange(hr) %>% #head
+  mutate(cancer = factor(cancer,levels = cancer)) %>% #pull(cancer)
+  mutate(p = ifelse(pvalue < 0.05,"*","NS")) %>% 
+  ggplot(aes(x = hr ,y = cancer))+
+  geom_vline(xintercept = 1,color = "gray")+
+  geom_point(aes(color = p),shape = 15,size = 2)+
+  theme_now()+
+  scale_x_log10()+
+  ggpubr::color_palette(fun_get_palette(palette)[c(2,1)])
+
+```
+
+# we retrived the immune ds from gse and nature ds
+```{r}
+
+# luad
+signature_genes = readRDS("data/signature.rds")
+
+luad_ds = readRDS("~/r_workspace/db/gse/RDS/LUAD_GSE135222_ICB_pfs.RDS")
+
+luad_clin= func.pca.signature(
+  luad_ds$expr,feature.selected = signature_genes
+)
+
+luad_ds$clin %>% 
+  mutate(ampk_score = luad_clin$AMPK_score[match(rownames(.),luad_clin$Row.names)]) %>% #colnames()
+  fun_surv_parsing(c("pfs_time","pfs_status",1)) %>% 
+  fun_surv_cutoff(feature = "ampk_score",pct =0.5) %>% 
+  fun_surv_km(palette = "lancet",graph_title = "luad_pfs") %>% 
+  fun_km_re()
+
+
+# kirc
+kirc_ds = readRDS("~/r_workspace/db/gse/RDS/kirc_nature_immune_os.rds")
+
+# get immune samples 
+kirc_ds$clin %<>% 
+  filter(Arm == "NIVOLUMAB") %>% 
+  filter(sample %in% colnames(kirc_ds$expr))
+
+kirc_clin= func.pca.signature(
+  kirc_ds$expr[,kirc_ds$clin$sample],feature.selected = signature_genes
+)
+
+kirc_ds$clin %>% 
+  mutate(ampk_score = kirc_clin$AMPK_score[match(rownames(.),kirc_clin$Row.names)]) %>% #colnames()
+  fun_surv_parsing(c("PFS","PFS_CNSR",1)) %>% 
+  fun_surv_cutoff(feature = "ampk_score",pct = seq(0.25,0.75,0.01)) %>% 
+  fun_surv_km(palette = "lancet",graph_title = "kirc_pfs") %>% 
+  fun_km_re()
+
+kirc_ds$clin %>% 
+  mutate(ampk_score = kirc_clin$AMPK_score[match(rownames(.),kirc_clin$Row.names)]) %>% #colnames()
+  fun_surv_parsing(c("OS","OS_CNSR",1)) %>% 
+  fun_surv_cutoff(feature = "ampk_score",pct = seq(0.25,0.75,0.01)) %>% 
+  fun_surv_km(palette = "lancet",graph_title = "kirc_os") %>% 
+  fun_km_re()
+
+kirc_ds$clin%>% 
+  mutate(ampk_score = kirc_clin$AMPK_score[match(rownames(.),kirc_clin$Row.names)]) %>% #colnames()
+  ggplot(aes(x = Benefit, y = ampk_score))+
+  geom_boxplot()
+
+kirc_ds$clin%>% 
+  mutate(response = ifelse(ORR %in% c("CR","CRPR","PR"),"CR/PR",
+                           ifelse(ORR %in% c("PD","SD"),"PD/SD",NA))) %>% 
+  filter(!is.na(response)) %>% 
+  mutate(ampk_score = kirc_clin$AMPK_score[match(rownames(.),kirc_clin$Row.names)]) %>% #colnames()
+  ggplot(aes(x = response, y = ampk_score))+
+  geom_boxplot()+
+  stat_compare_means()
+
+
+```
