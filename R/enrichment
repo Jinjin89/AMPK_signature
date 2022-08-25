@@ -1,0 +1,98 @@
+func.gseaFunction = function(geneData, orderCol, hsCOl,
+                             spe = "Homo sapiens",
+                             cate = "H",
+                             subcate = NULL,
+                             geneType= "gene_symbol"){
+  require(msigdbr)
+  require(clusterProfiler)
+  # gene_symbol ,entrez_gene ,human_ensembl_gene
+  # msigdbr 
+  #
+  gmt = msigdbr(species = spe,
+                category = cate,
+                subcategory = subcate)
+  
+  # 
+  gs <- gmt[,c("gs_name",geneType)]
+  # order
+  gorder <- order(geneData[,orderCol],decreasing = TRUE)
+  gene <- geneData[,orderCol][gorder]
+  names(gene) <- geneData[,hsCOl][gorder]
+  # gsea
+  gseaResult <- GSEA(geneList = gene,TERM2GENE = gs)
+  
+  return(gseaResult)
+}
+# correlation + enrichment
+func.cor.enrichment = function(expr.matr,
+                               score.dt,score.id="Sample ID",score.column = "Risk_score"
+                               ,enrichment=NULL
+                               ,geneType = 'gene_symbol'){
+  # pkgs
+  require(msigdbr)
+  require(clusterProfiler)
+  
+  # enrichment function
+  func.gseaFunction = function(geneData,orderCol,hsCOl,spe = "Homo sapiens",cate = "H",subcate = NULL,geneType="gene_symbol"){
+    require(msigdbr)
+    require(clusterProfiler)
+    # gene_symbol ,entrez_gene ,human_ensembl_gene
+    # msigdbr 
+    gmt = msigdbr(species = spe,
+                  category = cate,
+                  subcategory = subcate)
+    
+    # 
+
+    gs <- gmt[,c("gs_name",geneType)]
+    #gs <- gs[grepl("^KEGG_",gs[[1]]),]
+    #gs <- gs[-grep("CARDIO", gs[[1]]),]
+    
+    # if(cate == "C2"){
+    #   gs = gs[startsWith(gs$gs_name,"KEGG_"),]
+    # }
+    # 
+    # order
+    gorder <- order(geneData[,orderCol],decreasing = TRUE)
+    gene <- geneData[,orderCol][gorder]
+    names(gene) <- geneData[,hsCOl][gorder]
+    # gsea
+    gseaResult <- GSEA(geneList = gene,TERM2GENE = gs)
+    
+    return(gseaResult)
+  }
+  
+  #get correlation
+  socre.vec = score.dt[[score.column]][match(colnames(expr.matr),score.dt[[score.id]])]
+  #print(socre.vec)
+  score.sp = data.frame(as.matrix(apply(expr.matr,1,function(x)cor(x,socre.vec,use = "complete.obs",method = "sp"))
+  ))
+  colnames(score.sp) = "cor.sp"
+  
+  score.sp$hs = rownames(score.sp)
+  
+  # enrichment
+  if(is.null(enrichment)){
+    # return the correlation
+    return(score.sp)
+  }else{
+    # perform enrichment
+    enrichment.res = list()
+    enrichment.res[['cor.sp']] = score.sp
+    enrichment = tolower(enrichment)
+    score.sp = na.omit(score.sp)
+    # GO
+    if("go" %in% enrichment){
+      enrichment.res[["go"]] = func.gseaFunction(score.sp,orderCol = 1,hsCOl = 2,cate = "C5",geneType = geneType)
+    }
+    # KEGG
+    if("kegg" %in% enrichment){
+      enrichment.res[["kegg"]] = func.gseaFunction(score.sp,orderCol = 1,hsCOl = 2,cate = "C2",geneType = geneType)
+    }
+    # hallmark
+    if("hallmark" %in% enrichment){
+      enrichment.res[["hallmark"]] = func.gseaFunction(score.sp,orderCol = 1,hsCOl = 2,geneType = geneType)
+    }
+  }
+  return(enrichment.res)
+}
