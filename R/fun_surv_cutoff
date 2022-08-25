@@ -1,0 +1,105 @@
+fun_surv_cutoff = function(input_data,
+                           feature = "Risk_score",
+                           feature_out_names = 'Group',
+                           force_group=F,
+                           pct = 0.5,pct_labels = c("High","Low"),
+                           return_list = F,
+                           message = T){
+  
+  # principles:
+  # run fun_surv_parsing first
+  # not numeric, stop
+  # NULL return raw value
+  # length == 1, cutoff
+  # length 2, cutoff high and low
+  # lenght 3, try cutoff
+  suppressMessages(require(magrittr))
+  suppressMessages(require(dplyr))
+  suppressMessages(require(survival))
+  
+  if(feature_out_names %in% colnames(input_data)){
+    if(message){
+      message("Output feature group names found!")
+    }
+    if(force_group){
+      if(message){
+        message("Overwriting the current group")
+      }
+    }else{
+      stop("Stop cutoff, please select new group names")
+    }
+  }
+  # stop ----------------
+  stopifnot("Input data should be numeric" = is.numeric(input_data[[feature]])| is.null(pct))
+  
+  # 
+  stopifnot("Input percentage shoud range from 0 to 1, not NA" = is.null(pct)||!is.na(pct) && min(pct) > 0 && max(pct) < 1)
+  # get score_data--------------------
+  score_data = input_data[[feature]]
+  # if ... else ...  ---------------------
+  if(is.null(pct)){
+    input_data[[feature_out_names]]= score_data;
+    pct_select = NA;
+    df_cutoff = NA;
+  }else if(length(pct) == 1){
+    input_data[[feature_out_names]]=
+      ifelse(score_data > quantile(score_data,pct,na.rm=T),
+             pct_labels[1],
+             pct_labels[2])   
+    pct_select = NA;
+    df_cutoff = NA;
+    
+  }else if(length(pct) == 2){
+    pct = sort(pct)
+    input_data[[feature_out_names]]=
+      ifelse(score_data > quantile(score_data,pct[2],na.rm=T),
+             pct_labels[1],
+             ifelse(score_data <= quantile(score_data,pct[1],na.rm=T),
+                    pct_labels[2],NA))
+    pct_select = NA;
+    df_cutoff = NA;
+  }else{
+    if(message){
+      message("multiple(>2) pct values supplied,Using cox analysis to get best cutoff!")
+    }
+    pct = sort(pct)
+    df_cutoff = data.frame(pct = pct)
+    df_cutoff$hr = NA
+    df_cutoff$pvalues = NA
+    
+    # for loop get pvalues for each percentage
+    for(i in 1:nrow(df_cutoff)){
+      pct_tmp = df_cutoff$pct[i]
+      input_data$cutoff_try_group =
+        ifelse(score_data >quantile(score_data,pct_tmp,na.rm =T),1,0)# 1 means high values, 0 means low values.
+      pct_surv_results = coxph(Surv(time,status)~cutoff_try_group,data = input_data) %>% 
+        {coef(summary(.))}
+      df_cutoff[i,"hr"] = pct_surv_results[,2]
+      df_cutoff[i,"pvalues"] = pct_surv_results[,5]
+    }
+    # get cutoof 
+    input_data$cutoff_try_group = NULL
+    pct_select = df_cutoff$pct[which.min(df_cutoff$pvalues)]
+    if(message){
+      message("The optimal cutoff point was at: ")
+      message(pct_select)
+    }
+    # get cutoff
+    input_data[[feature_out_names]]=
+      ifelse(score_data > quantile(score_data,pct_select,na.rm=T),
+             pct_labels[1],
+             pct_labels[2]) 
+    
+  }
+  
+  # return data step--------------------
+  if(return_list){
+    list(data = input_data,
+         cutoff = pct_select,
+         df_cutoff = df_cutoff) %>% 
+      return()
+  }else{
+    return(input_data)
+  }
+}
+
