@@ -11,15 +11,6 @@ editor_options:
   chunk_output_type: console
 ---
 
-
-############################################################################
-#This rmarkdown file collected script from different authors.
-#I really appreciated that they agree to make it to public.
-############################################################################
-
-
-
-
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE,dev = "pdf",fig.path = "./pdf/",out.height = "450px",warning = F)
 ```
@@ -887,7 +878,7 @@ pancancer_list %>%
 
 ```
 
-# we retrived the immune ds from gse and nature ds
+# we retrived the immune ds from gse and ICGC ds
 ```{r}
 
 # luad
@@ -906,46 +897,223 @@ luad_ds$clin %>%
   fun_surv_km(palette = "lancet",graph_title = "luad_pfs") %>% 
   fun_km_re()
 
-
 # kirc
-kirc_ds = readRDS("~/r_workspace/db/gse/RDS/kirc_nature_immune_os.rds")
+kirc_ds = readRDS("~/r_workspace/db/gse/RDS/kirc_icgc_reacEU_os_cancer_normal.rds")
 
-# get immune samples 
 kirc_ds$clin %<>% 
-  filter(Arm == "NIVOLUMAB") %>% 
-  filter(sample %in% colnames(kirc_ds$expr))
+  filter(sample %in% colnames(kirc_ds$expr)) %>% 
+  filter(tissue == "cancer")
 
 kirc_clin= func.pca.signature(
   kirc_ds$expr[,kirc_ds$clin$sample],feature.selected = signature_genes
 )
 
-kirc_ds$clin %>% 
-  mutate(ampk_score = kirc_clin$AMPK_score[match(rownames(.),kirc_clin$Row.names)]) %>% #colnames()
-  fun_surv_parsing(c("PFS","PFS_CNSR",1)) %>% 
-  fun_surv_cutoff(feature = "ampk_score",pct = seq(0.25,0.75,0.01)) %>% 
-  fun_surv_km(palette = "lancet",graph_title = "kirc_pfs") %>% 
-  fun_km_re()
 
 kirc_ds$clin %>% 
   mutate(ampk_score = kirc_clin$AMPK_score[match(rownames(.),kirc_clin$Row.names)]) %>% #colnames()
-  fun_surv_parsing(c("OS","OS_CNSR",1)) %>% 
   fun_surv_cutoff(feature = "ampk_score",pct = seq(0.25,0.75,0.01)) %>% 
-  fun_surv_km(palette = "lancet",graph_title = "kirc_os") %>% 
+  fun_surv_km(palette = "lancet",graph_title = "ICGC_KIRC") %>% 
   fun_km_re()
 
-kirc_ds$clin%>% 
-  mutate(ampk_score = kirc_clin$AMPK_score[match(rownames(.),kirc_clin$Row.names)]) %>% #colnames()
-  ggplot(aes(x = Benefit, y = ampk_score))+
-  geom_boxplot()
+```
 
-kirc_ds$clin%>% 
-  mutate(response = ifelse(ORR %in% c("CR","CRPR","PR"),"CR/PR",
-                           ifelse(ORR %in% c("PD","SD"),"PD/SD",NA))) %>% 
-  filter(!is.na(response)) %>% 
-  mutate(ampk_score = kirc_clin$AMPK_score[match(rownames(.),kirc_clin$Row.names)]) %>% #colnames()
-  ggplot(aes(x = response, y = ampk_score))+
-  geom_boxplot()+
-  stat_compare_means()
+# clin table
 
+```{r }
+gse13861_clin %>% 
+  fun_dt_dt(x_name = "gse13861")
+gse26901_clin %>% 
+  fun_dt_dt(x_name = "gse26901")
+
+gse66229_clin %>% 
+  fun_dt_dt(x_name = "gse66229")
+
+source("~/r_workspace/script/rscript/fun_data_parsing.R")
+gse13861_clin %>% 
+  mutate(m_stage = paste0("M",M.stage)) %>% 
+  fun_data_parsing(features = c("Sex","Age","AJCC6","m_stage"))
+
+
+tcga_clin_data %>% 
+  filter(!is.na(Cluster)) %>% 
+  mutate(age = `Diagnosis Age`) %>% 
+  mutate(stage = `Neoplasm Disease Stage American Joint Committee on Cancer Code`,
+         stage = str_extract(stage,"STAGE I(I|V)*")) %>% 
+  fun_data_parsing(
+    features = c("age","Sex","T_stage","N_stage","M_stage","stage","grade","Subtype")
+  ) ->tmp 
+
+tmp$Char %>% 
+  fun_dt_dt()
+
+gse13861_clin %>% 
+  mutate(m_stage = paste0("M",M.stage)) %>% 
+  fun_data_parsing(features = c("Sex","Age","AJCC6","m_stage","Lauren")) %>% 
+  {.[[2]]} %>% 
+  fun_dt_dt()
+
+gse26901_clin %>% 
+  fun_data_parsing(features = c("Sex","ACRG.sub","AJCC.stage","Lauren","LAUREN 1=intestinal, 2=diffuse, 3=mixed")) %>% 
+  {.[[2]]} %>% 
+  fun_dt_dt()
+
+gse66229_clin %>% #colnames()
+  mutate_all(as.character) %>% 
+  fun_data_parsing(c("sex","Lauren","ACRG.sub","T","N","M","Stage"
+                     )) %>% 
+  {.[[2]]} %>% 
+  fun_dt_dt()
+
+```
+
+
+
+
+# other validation
+
+```{r validation}
+fun_gse_validation =function(input_ds,nm){
+  gse_data = readRDS(input_ds)
+  
+  clin_now = func.pca.signature(gse_data$expr,
+                                   feature.selected = signature_genes) %>% 
+  mutate(time = gse_data$clin$time[match(.$Row.names,gse_data$clin$sample)],
+         status = gse_data$clin$status[match(.$Row.names,gse_data$clin$sample)])
+  
+  clin_now %>% 
+    fun_surv_cutoff(feature = "AMPK_score",pct = seq(0.25,0.75,0.01)) %>% 
+    fun_surv_km(palette = "lancet",graph_title = nm) %>% 
+    fun_km_re()
+  
+}
+
+# BLCA
+fun_gse_validation("~/r_workspace/db/gse/RDS/blca_gse32548_os.rds",nm = "BLCA_GSE32548")
+
+# PAAD
+fun_gse_validation("~/r_workspace/db/gse/RDS/paad_gse57495_os.RDS",nm = "PAAD_GSE57495")
+
+# LUAD
+fun_gse_validation("~/r_workspace/db/gse/RDS/luad_gse13213_os.rds",nm = "LUAD_GSE13213")
+
+
+```
+
+
+
+
+
+# tcga suppliment analysis
+
+```{r}
+load("../GC_cluster_ampk/.RData")
+
+tcga_clin_data = ds_list$tcga$clin %>% 
+  fun_surv_parsing("os")
+
+list(
+tcga_clin_data %>% 
+  fun_timeROC(Group = "AMPK_score",data_name = "TCGA:OS") ,
+
+tcga_clin_data %>% 
+  fun_surv_parsing("dfs") %>% 
+  fun_timeROC(Group = "AMPK_score",data_name = "TCGA:DFS") ,
+
+# gse 13861
+gse13861_clin %>% 
+  mutate(AMPK_score = MAPK_score) %>% 
+  fun_timeROC(Group = "AMPK_score",data_name = "GSE13861:OS"),
+
+gse13861_clin %>% 
+  mutate(AMPK_score = MAPK_score) %>% 
+  fun_surv_parsing(osOrdfs = c("RFS.m","Recurrence (1=yes, 0=no)",1)) %>% 
+  fun_timeROC(Group = "AMPK_score",data_name = "GSE13861:RFS") ,
+
+# gse26901
+gse26901_clin %>% 
+   mutate(AMPK_score = MAPK_score) %>% 
+  fun_timeROC(Group = "AMPK_score",data_name = "GSE26901:OS") ,
+gse26901_clin %>% #head
+   mutate(AMPK_score = MAPK_score) %>% 
+  fun_surv_parsing(osOrdfs = c("RFS.m","Recurrence (1=yes, 0=no)",1)) %>% 
+  fun_timeROC(Group = "AMPK_score",data_name = "GSE26901:RFS"),
+
+
+
+# gse66229
+gse66229_clin %>% 
+   mutate(AMPK_score = MAPK_score) %>% 
+  fun_timeROC(Group = "AMPK_score",data_name = "GSE66229:OS"),
+
+gse66229_clin %>% #head
+   mutate(AMPK_score = MAPK_score) %>% 
+  fun_surv_parsing(osOrdfs = c("DFS.m","Recur",1)) %>% 
+  fun_timeROC(Group = "AMPK_score",data_name = "GSE66229:DFS")) %>% 
+  fun_timeROC_merge() -> roc_merge
+
+roc_merge  %>% 
+  fun_plot_timeROC_line(group_features = "AMPK_score",ribbon = F)+
+  theme(legend.position = "top")
+
+roc_merge$auc %>% 
+  mutate(ds = str_remove(data_name,":.+")) %>% 
+  mutate(data_name = factor(data_name, levels = unique(data_name))) %>% 
+  ggplot(aes(x = data_name,y = auc,fill = factor(time)))+
+  geom_bar(stat = "identity",position = "dodge")+
+  coord_cartesian(ylim = c(0,0.78))
+
+# 
+# fun_clin_surv_strati(
+#   tcga_clin_data %>% 
+#     mutate(T_stage = str_extr),
+#   Risk_score = "AMPK_signature",
+#   features = 
+# )
+
+```
+
+
+# nomogram
+
+```{r }
+tcga_clin_data%<>% 
+  mutate(T_stage = str_extract(`American Joint Committee on Cancer Tumor Stage Code`,"T\\d+"),
+         N_stage = str_extract(`Neoplasm Disease Lymph Node Stage American Joint Committee on Cancer Code`,"N\\d+"),
+         M_stage = str_extract(`American Joint Committee on Cancer Metastasis Stage Code`,"M\\d+"),
+         grade =`Neoplasm Histologic Grade` ) %>% 
+  mutate(age =`Diagnosis Age`)
+
+nomo_data = 
+  tcga_clin_data %>% 
+  mutate(T_stage= ifelse(T_stage %in% c("T1","T2"),"T1-2","T3-4"),
+         N_stage = ifelse(N_stage == "N0","N0","N1+")) %>% 
+  fun_nomogram(features = c("AMPK_score","Sex","age","T_stage","N_stage","M_stage"),
+               B = 1000,m = 100)
+
+```
+
+
+
+```{r }
+
+roc_compare = 
+  map(c("Points","T_stage","N_stage","M_stage","age","Sex"),function(x){
+  print(x)
+  nomo_data$data %>% 
+    mutate_at(x,fun_data_cha2num) %>% 
+    fun_timeROC(Group = x,data_name = x)
+  
+})  %>% 
+  fun_timeROC_merge() 
+
+
+map(c(1:5)*12,function(x){
+  roc_compare %>% 
+  fun_plot_timeROC_curve(plot_group = T,
+                         group_time = x,
+                         palette = get_palette(k=7),
+                         legend_suffix = ": ",
+                         title = paste0(x/12,"-year survival"))
+})
 
 ```
